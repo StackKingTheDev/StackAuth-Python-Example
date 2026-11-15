@@ -7,6 +7,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import config
+from app import TokenStore
 from stackauth import StackAuth, StackAuthError
 
 
@@ -30,6 +31,13 @@ class StackAuthSmokeTests(unittest.TestCase):
         with self.assertRaises(StackAuthError) as context:
             client.decrypt_file_bytes("example.bin", b"bad")
         self.assertEqual(context.exception.code, "FILE_DECRYPT_FAILED")
+
+    @unittest.skipUnless(TokenStore.available, "Windows DPAPI is not available")
+    def test_refresh_token_dpapi_round_trip(self):
+        token = b"example-refresh-token"
+        protected = TokenStore._transform(token, True)
+        self.assertNotEqual(protected, token)
+        self.assertEqual(TokenStore._transform(protected, False), token)
 
 
 if __name__ == "__main__":

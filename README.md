@@ -30,6 +30,7 @@ The two demo buttons sign in with these shared accounts. You can also register, 
 - C#-style sign-in experience with dedicated Sign in, Register and License key tabs
 - Member profile sidebar with access level, expiration, member dates, 2FA state and demo/staff badges
 - Signed init, login, registration, license login, refresh-token rotation and logout
+- Optional Windows “Remember me” using per-user DPAPI protection and automatic session restoration
 - Overview of the app announcement, public welcome variable and enabled security features
 - Public, secured, level-gated and per-member variables, including a side-by-side Fake mode test
 - Protected files loaded and verified in memory or streamed to disk, plus update checks

@@ -1,5 +1,6 @@
 """StackWorkShop Auth Python desktop example (Python 3.8+, standard library only)."""
 
+import ctypes
 import hashlib
 import json
 import os
@@ -55,6 +56,79 @@ def json_text(value):
     return json.dumps(value, indent=2, ensure_ascii=False)
 
 
+class TokenStore:
+    """Windows DPAPI storage for the rotating refresh token."""
+
+    available = os.name == "nt"
+    _path = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "StackWorkShop" / "python-example.token"
+
+    if available:
+        class _Blob(ctypes.Structure):
+            _fields_ = [
+                ("size", ctypes.c_ulong),
+                ("data", ctypes.POINTER(ctypes.c_ubyte)),
+            ]
+
+    @classmethod
+    def has_token(cls):
+        return cls.available and cls._path.is_file()
+
+    @classmethod
+    def _transform(cls, value, protect):
+        if not cls.available:
+            return None
+        buffer = ctypes.create_string_buffer(value)
+        source = cls._Blob(
+            len(value),
+            ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)),
+        )
+        target = cls._Blob()
+        function = (
+            ctypes.windll.crypt32.CryptProtectData
+            if protect
+            else ctypes.windll.crypt32.CryptUnprotectData
+        )
+        if not function(
+            ctypes.byref(source),
+            None,
+            None,
+            None,
+            None,
+            0,
+            ctypes.byref(target),
+        ):
+            raise ctypes.WinError()
+        try:
+            return ctypes.string_at(target.data, target.size)
+        finally:
+            ctypes.windll.kernel32.LocalFree(target.data)
+
+    @classmethod
+    def save(cls, token):
+        if not cls.available or not token:
+            return
+        cls._path.parent.mkdir(parents=True, exist_ok=True)
+        cls._path.write_bytes(cls._transform(token.encode("utf-8"), True))
+
+    @classmethod
+    def load(cls):
+        if not cls.has_token():
+            return None
+        try:
+            protected = cls._path.read_bytes()
+            return cls._transform(protected, False).decode("utf-8")
+        except (OSError, UnicodeError):
+            cls.clear()
+            return None
+
+    @classmethod
+    def clear(cls):
+        try:
+            cls._path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 class ScrollPage(ttk.Frame):
     """A vertical, scrollable page similar to the C# example's flow panels."""
 
@@ -106,7 +180,8 @@ class StackAuthExample(tk.Tk):
         self.status = tk.StringVar(value="Connecting…")
         self.username = tk.StringVar()
         self.password = tk.StringVar()
-        self.remember = tk.BooleanVar(value=False)
+        self.remember = tk.BooleanVar(value=TokenStore.has_token())
+        self.auth.on_tokens = self.tokens_changed
         self.reg_username = tk.StringVar()
         self.reg_email = tk.StringVar()
         self.reg_password = tk.StringVar()
@@ -303,6 +378,7 @@ class StackAuthExample(tk.Tk):
         text = self.error_text(error)
         self.set_status(text, COLORS["danger"])
         if isinstance(error, StackAuthError) and error.code in self.SESSION_ERRORS:
+            TokenStore.clear()
             messagebox.showwarning("Signed out", text, parent=self)
             self.show_login_again()
             return
@@ -322,6 +398,10 @@ class StackAuthExample(tk.Tk):
                 raise
             self.auth.init()
             return operation()
+
+    def tokens_changed(self, _session_token, refresh_token):
+        if self.remember.get() and refresh_token:
+            TokenStore.save(refresh_token)
 
     # ------------------------------------------------------------------ login
 
@@ -366,8 +446,9 @@ class StackAuthExample(tk.Tk):
         password_entry = self.entry(signin, self.password, show="•")
         remember = ttk.Checkbutton(
             signin,
-            text="Remember me while this app stays open",
+            text="Remember me on this PC" if TokenStore.available else "Remember me (Windows only)",
             variable=self.remember,
+            state="normal" if TokenStore.available else "disabled",
         )
         remember.pack(anchor="w", pady=(0, 8))
         signin_actions = self.row(signin)
@@ -424,91 +505,23 @@ class StackAuthExample(tk.Tk):
         self.set_busy(True)
 
     def initialize(self):
-        self.run_task(self.auth.init, self.initialized, "Connecting to StackWorkShop Auth…")
+        self.run_task(self.startup, self.initialized, "Connecting to StackWorkShop Auth…")
 
-    def initialized(self, data):
+    def startup(self):
+        data = self.auth.init()
+        refresh = TokenStore.load()
+        if refresh:
+            try:
+                return {"init": data, "session": self.auth.refresh(refresh)}
+            except StackAuthError:
+                TokenStore.clear()
+                self.auth.refresh_token = None
+        return {"init": data, "session": None}
+
+    def initialized(self, result):
+        data = result["init"] if "init" in result else result
         self.app_data = data["app"]
-        self.login_title.configure(text=self.app_data.get("name", "StackWorkShop Auth"))
-        self.login_subtitle.configure(
-            text=f"Version {config.VERSION} · server version {self.app_data.get('version', '—')}"
-        )
-        self.announcement_label.configure(text=self.app_data.get("announcement") or "No announcement.")
-        try:
-            if not self.app_data.get("registration_open", True):
-                self.login_notebook.tab(1, state="disabled")
-        except tk.TclError:
-            pass
-        if self.app_data.get("outdated"):
-            self.set_status(
-                f"A newer version ({self.app_data.get('version')}) is available.",
-                COLORS["warning"],
-            )
-        else:
-            self.set_status("Ready. Sign in, register, or use a license key.", COLORS["success"])
-
-    def require(self, *values):
-        if any(not value.strip() for value in values):
-            raise ValueError("Complete the required fields.")
-
-    def login(self):
-        username, password = self.username.get().strip(), self.password.get()
-        try:
-            self.require(username, password)
-        except ValueError as error:
-            self.finish_error(error)
-            return
-
-        def handle(error):
-            if not isinstance(error, StackAuthError) or error.code != "TOTP_REQUIRED":
-                return False
-            code = simpledialog.askstring(
-                "Two-step verification",
-                "Enter the 6-digit code from your authenticator app:",
-                parent=self,
-            )
-            if code:
-                self.run_task(
-                    lambda: (self.auth.init(), self.auth.login(username, password, totp=code))[1],
-                    self.signed_in,
-                    "Checking the verification code…",
-                )
-            return True
-
-        self.run_task(
-            lambda: self.auth.login(username, password),
-            self.signed_in,
-            "Signing in…",
-            handle,
-        )
-
-    def demo_login(self, username, password):
-        self.username.set(username)
-        self.password.set(password)
-        self.login()
-
-    def register(self):
-        username = self.reg_username.get().strip()
-        password = self.reg_password.get()
-        try:
-            self.require(username, password)
-        except ValueError as error:
-            self.finish_error(error)
-            return
-        self.run_task(
-            lambda: self.auth.register(
-                username,
-                password,
-                license=self.reg_license.get().strip() or None,
-                email=self.reg_email.get().strip() or None,
-            ),
-            self.signed_in,
-            "Creating your account…",
-        )
-
-    def license_login(self):
-        key = self.license_key.get().strip()
-        if not key:
-            self.finish_error(ValueErro…3942 tokens truncated…eparate from sessions. Decrypting requires the account credentials and an active license. Ship the ciphertext in your tool and decrypt it at runtime.",
+        self.login_title.configure(text=self.…4731 tokens truncated…ntials and an active license. Ship the ciphertext in your tool and decrypt it at runtime.",
             muted=True,
         )
         credentials = self.row(page)
@@ -975,6 +988,8 @@ class StackAuthExample(tk.Tk):
         self.run_task(self.auth.logout, lambda _data: self.show_login_again(), "Signing out…")
 
     def show_login_again(self):
+        TokenStore.clear()
+        self.remember.set(False)
         self.auth.session_token = None
         self.auth.refresh_token = None
         self.auth.member = None
