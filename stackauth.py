@@ -2,6 +2,7 @@
 
 https://auth.stackworkshop.com/docs/
 """
+import base64
 import hashlib
 import hmac
 import json
@@ -42,6 +43,36 @@ def _decrypt_file_container(container, secret, app_id, name):
         for index in range(length):
             output[offset + index] = encrypted[offset + index] ^ stream[index]
     return bytes(output)
+
+
+def _decrypt_credential_variable(envelope, username, password):
+    if envelope.get("version") != 1 or envelope.get("algorithm") != "AES-256-GCM" or envelope.get("kdf") != "PBKDF2-SHA256":
+        raise StackAuthError("VARIABLE_DECRYPT_FAILED", "The encrypted variable envelope is not supported.")
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError as error:
+        raise StackAuthError(
+            "VARIABLE_CRYPTO_UNAVAILABLE",
+            "Credential-encrypted variables need the optional cryptography package: pip install cryptography",
+        ) from error
+    try:
+        salt = base64.b64decode(envelope["salt"], validate=True)
+        iv = base64.b64decode(envelope["iv"], validate=True)
+        ciphertext = base64.b64decode(envelope["ciphertext"], validate=True)
+        tag = base64.b64decode(envelope["tag"], validate=True)
+        key = hashlib.pbkdf2_hmac(
+            "sha256", (str(username) + "\0" + str(password)).encode(), salt, int(envelope["iterations"]), 32
+        )
+        plaintext = AESGCM(key).decrypt(
+            iv, ciphertext + tag, b"StackWorkShop Auth credential variable v1"
+        )
+        return plaintext.decode()
+    except StackAuthError:
+        raise
+    except Exception as error:
+        raise StackAuthError(
+            "VARIABLE_DECRYPT_FAILED", "The encrypted variable could not be decrypted with these credentials."
+        ) from error
 
 
 class StackAuthError(Exception):
@@ -90,7 +121,7 @@ class StackAuth:
             method="POST",
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "StackAuthClient/1.7 (python)",
+                "User-Agent": "StackAuthClient/1.8 (python)",
                 "X-App-Id": self.app_id,
                 "X-Timestamp": timestamp,
                 "X-Nonce": nonce,
@@ -215,10 +246,20 @@ class StackAuth:
 
     # ---- variables
 
-    def variable(self, name):
+    def variable(self, name, username=None, password=None):
+        payload = {"name": name, "username": username, "password": password}
         if self.session_token:
-            return self._session_call("var", {"name": name})["value"]
-        return self.call("var", {"name": name, "init_token": self.init_token})["value"]
+            data = self._session_call("var", payload)
+        else:
+            data = self.call("var", dict(payload, init_token=self.init_token))
+        if not data.get("encrypted"):
+            return data["value"]
+        if not username or not password:
+            raise StackAuthError(
+                "VARIABLE_CREDENTIALS_REQUIRED",
+                "Pass username and password to read this credential-encrypted variable.",
+            )
+        return _decrypt_credential_variable(data["envelope"], username, password)
 
     def get_user_var(self, name):
         return self._session_call("uservar/get", {"name": name})["value"]
@@ -252,7 +293,7 @@ class StackAuth:
         return self._session_call("file", payload) if self.session_token else self.call("file", payload)
 
     def _open(self, info):
-        request = urllib.request.Request(self.base_url + info["download_path"], headers={"User-Agent": "StackAuthClient/1.7 (python)"})
+        request = urllib.request.Request(self.base_url + info["download_path"], headers={"User-Agent": "StackAuthClient/1.8 (python)"})
         try:
             return urllib.request.urlopen(request, timeout=60)
         except urllib.error.HTTPError as error:
@@ -328,7 +369,7 @@ class StackAuth:
         def run():
             fields = {k: v for k, v in {"token": self.session_token, "hwid": self.hwid}.items() if v}
             url = f"{self.base_url}/api/v1/scripts/{urllib.parse.quote(self.app_id, safe='')}/{urllib.parse.quote(script_id, safe='')}"
-            headers = {"User-Agent": "StackAuthClient/1.7 (python)"}
+            headers = {"User-Agent": "StackAuthClient/1.8 (python)"}
             body = None
             if params_in == "url" and fields:
                 url += "?" + urllib.parse.urlencode(fields)
