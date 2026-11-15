@@ -1,8 +1,8 @@
 # StackWorkShop Auth: Python example
 
-A complete Python 3.8+ desktop app that uses [StackWorkShop Auth](https://auth.stackworkshop.com) for login, registration, license keys, subscriptions, protected variables/files, custom scripts, sessions and a staff overview.
+A complete Python 3.8+ desktop app that uses [StackWorkShop Auth](https://auth.stackworkshop.com) for login, registration, license keys, subscriptions, protected variables/files, custom scripts, account management and the in-app staff panel.
 
-It uses only Python's standard library (including Tkinter), so there is no `pip install` step.
+The Tkinter interface follows the C# example's layout: separate Sign in, Register and License key pages lead to a member dashboard with a profile sidebar and feature-focused tabs. It uses only Python's standard library, so there is no `pip install` step.
 
 ## Run it
 
@@ -23,18 +23,23 @@ On Windows, you can also double-click `run.bat`.
 | Lifetime member | `demo_member` | `DemoMember!2026` |
 | Staff/admin (read-only) | `demo_admin` | `DemoAdmin!2026` |
 
-The two demo buttons fill these shared accounts. You can also register, use a license key, redeem a key, or reset a member HWID.
+The two demo buttons sign in with these shared accounts. You can also register, use a license key, redeem a key, or reset a member HWID.
 
 ## What the app demonstrates
 
+- C#-style sign-in experience with dedicated Sign in, Register and License key tabs
+- Member profile sidebar with access level, expiration, member dates, 2FA state and demo/staff badges
 - Signed init, login, registration, license login, refresh-token rotation and logout
-- Member subscription/expiration checks and staff-role detection
-- Public and secured variables, including Fake mode behavior configured by the app owner
-- Protected files loaded and verified in memory or streamed to disk
+- Overview of the app announcement, public welcome variable and enabled security features
+- Public, secured, level-gated and per-member variables, including a side-by-side Fake mode test
+- Protected files loaded and verified in memory or streamed to disk, plus update checks
 - Encrypted-file containers that are decrypted only in memory by the SDK
+- Licensed string-vault encryption and decryption
 - GET/POST custom scripts with login sent in headers, URL parameters or a POST body
-- Session/device listing, update checks and signed application logs
-- Staff overview for staff-level members
+- License redemption, password changes, 2FA setup/removal and self-service HWID reset
+- Session/device listing with selected-device and all-other-device revocation
+- Signed app logs and the optional Discord webhook relay
+- Full staff panel with stats, member search/actions, license creation and recent activity
 - HTTPS verification, HMAC-signed requests and verified server response signatures
 - A stable SHA-256 example HWID without exposing raw machine values
 
@@ -67,20 +72,3 @@ Prefer headers or POST bodies for credentials. URL parameters may appear in hist
 Docs: [auth.stackworkshop.com/docs](https://auth.stackworkshop.com/docs/) · Other examples: [C#](https://github.com/StackKingTheDev/StackAuth-CSharp-Example) · [C++](https://github.com/StackKingTheDev/StackAuth-CPP-Example) · [PHP](https://github.com/StackKingTheDev/StackAuth-PHP-Example) · [Node](https://github.com/StackKingTheDev/StackAuth-Node-Example)
 
 MIT licensed.
-
-## Variable templates and credential encryption
-
-Variable values can reference the signed-in member and other variables, for example `Welcome {client.username} to {var.appname}!`. Templates resolve on the Auth server after the normal access checks.
-
-For a secured variable with **Credential-encrypted response** enabled, install the optional crypto helper and call it after login with the same member credentials:
-
-```bash
-pip install cryptography
-```
-
-```python
-welcome = auth.variable(
-    "welcome_message_afterlogin", username, password)
-```
-
-The SDK decrypts the AES-256-GCM response in memory. The stored password hash is never sent to the client, and Fake mode returns the same encrypted envelope shape with the fake value.
