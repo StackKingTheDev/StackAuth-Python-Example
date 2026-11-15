@@ -67,3 +67,20 @@ Prefer headers or POST bodies for credentials. URL parameters may appear in hist
 Docs: [auth.stackworkshop.com/docs](https://auth.stackworkshop.com/docs/) · Other examples: [C#](https://github.com/StackKingTheDev/StackAuth-CSharp-Example) · [C++](https://github.com/StackKingTheDev/StackAuth-CPP-Example) · [PHP](https://github.com/StackKingTheDev/StackAuth-PHP-Example) · [Node](https://github.com/StackKingTheDev/StackAuth-Node-Example)
 
 MIT licensed.
+
+## Variable templates and credential encryption
+
+Variable values can reference the signed-in member and other variables, for example `Welcome {client.username} to {var.appname}!`. Templates resolve on the Auth server after the normal access checks.
+
+For a secured variable with **Credential-encrypted response** enabled, install the optional crypto helper and call it after login with the same member credentials:
+
+```bash
+pip install cryptography
+```
+
+```python
+welcome = auth.variable(
+    "welcome_message_afterlogin", username, password)
+```
+
+The SDK decrypts the AES-256-GCM response in memory. The stored password hash is never sent to the client, and Fake mode returns the same encrypted envelope shape with the fake value.
